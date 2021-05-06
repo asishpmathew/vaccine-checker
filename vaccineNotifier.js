@@ -3,6 +3,10 @@ const moment = require('moment');
 const cron = require('node-cron');
 const axios = require('axios');
 const notifier = require('./notifier');
+
+const csv = require('csv-parser');
+const fs = require('fs');
+
 /**
 Step 1) Enable application access on your gmail with steps given here:
  https://support.google.com/accounts/answer/185833?p=InvalidSecondFactor&visit_id=637554658548216477-2576856839&rd=1
@@ -14,33 +18,53 @@ Step 3) On your terminal run: npm i && pm2 start vaccineNotifier.js
 To close the app, run: pm2 stop vaccineNotifier.js && pm2 delete vaccineNotifier.js
  */
 
-const PINCODE = process.env.PINCODE
-const EMAIL = process.env.EMAIL
-const AGE = process.env.AGE
+//const PINCODE = process.env.PINCODE
+//const EMAIL = process.env.EMAIL
+//const AGE = process.env.AGE
 
 async function main(){
+    
     try {
-        cron.schedule('* * * * *', async () => {
-             await checkAvailability();
-        });
+        let datas = await getEmpDetailsByEmailIdAndUniqueCode("data.csv");
+        for (var j = 0; j < datas.length; j++){
+            await checkAvailability(datas[j].email, datas[j].pincode, datas[j].age);
+        }
     } catch (e) {
         console.log('an error occured: ' + JSON.stringify(e, null, 2));
         throw e;
     }
 }
 
-async function checkAvailability() {
 
+
+async function getEmpDetailsByEmailIdAndUniqueCode(fileName){
+    return new Promise(function(resolve,reject){
+      var fetchData = [];
+      fs.createReadStream(fileName)
+        .pipe(csv())
+        .on('data', (row) => {
+            fetchData.push(row);
+        })
+        .on('end', () => {
+          console.log('CSV file successfully processed');
+          resolve(fetchData);
+        })
+        .on('error', reject);
+    })
+  }
+
+
+async function checkAvailability(email, pincode, age) {
     let datesArray = await fetchNext10Days();
     datesArray.forEach(date => {
-        getSlotsForDate(date);
+        getSlotsForDate(date, email, pincode, age);
     })
 }
 
-function getSlotsForDate(DATE) {
+function getSlotsForDate(DATE, email, pincode, age) {
     let config = {
         method: 'get',
-        url: 'https://cdn-api.co-vin.in/api/v2/appointment/sessions/public/findByPin?pincode=' + PINCODE + '&date=' + DATE,
+        url: 'https://cdn-api.co-vin.in/api/v2/appointment/sessions/public/findByPin?pincode=' + pincode + '&date=' + DATE,
         headers: {
             'accept': 'application/json',
             'Accept-Language': 'hi_IN'
@@ -50,10 +74,10 @@ function getSlotsForDate(DATE) {
     axios(config)
         .then(function (slots) {
             let sessions = slots.data.sessions;
-            let validSlots = sessions.filter(slot => slot.min_age_limit <= AGE &&  slot.available_capacity > 0)
+            let validSlots = sessions.filter(slot => slot.min_age_limit <= age &&  slot.available_capacity > 0)
             console.log({date:DATE, validSlots: validSlots.length})
             if(validSlots.length > 0) {
-                notifyMe(validSlots);
+                notifyMe(validSlots, email);
             }
         })
         .catch(function (error) {
@@ -63,9 +87,9 @@ function getSlotsForDate(DATE) {
 
 async function
 
-notifyMe(validSlots){
+notifyMe(validSlots,  email){
     let slotDetails = JSON.stringify(validSlots, null, '\t');
-    notifier.sendEmail(EMAIL, 'VACCINE AVAILABLE', slotDetails, (err, result) => {
+    notifier.sendEmail(email, 'VACCINE AVAILABLE', slotDetails, (err, result) => {
         if(err) {
             console.error({err});
         }
